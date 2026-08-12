@@ -712,6 +712,17 @@
   body.kiosk-active { margin: 0; overflow: hidden; background: var(--cork-texture-base); }
   body.kiosk-active #app { display: none; }
   body.kiosk-active #kioskRoot { display: block; }
+  #kioskFullscreenBtn {
+    position: fixed; bottom: 14px; right: 14px; z-index: 999;
+    width: 42px; height: 42px; border-radius: 50%; border: none;
+    background: rgba(58,52,44,0.55); color: #F7F3EC; font-size: 20px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; opacity: 0.55; transition: opacity 0.2s;
+  }
+  #kioskFullscreenBtn:hover { opacity: 1; }
+  /* Once the browser reports true fullscreen, hide the button entirely —
+     nothing left to tap, and it would otherwise sit on top of the board. */
+  body.kiosk-fs-active #kioskFullscreenBtn { display: none; }
 
   .corkboard-viewport {
     position: fixed; inset: 0;
@@ -1109,6 +1120,7 @@
   <div class="corkboard-viewport" id="corkboardViewport">
     <div class="corkboard-stage" id="corkboardStage"></div>
   </div>
+  <button id="kioskFullscreenBtn" title="Enter fullscreen" aria-label="Enter fullscreen">⛶</button>
 </div>
 
 <!-- ===================== ITEM DETAIL MODAL ===================== -->
@@ -1608,14 +1620,14 @@ async function fetchAndCacheWeather() {
    never auto-logged twice; the laundry toggle in the item modal is still
    there for the user to flip anything back to clean by hand. */
 async function autoLogPastPlans() {
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayISO = todayStr();
   for (const member of members) {
     let snap;
     try {
       snap = await getDocs(query(
         collection(db, "outfitPlans"),
         where("memberId", "==", member.id),
-        where("date", "<", todayStr)
+        where("date", "<", todayISO)
       ));
     } catch (e) {
       // If Firestore hasn't built the composite index for this query yet,
@@ -4317,7 +4329,7 @@ async function renderCalendarMonth() {
   document.getElementById("calNavLabel").textContent = calMonthCursor.toLocaleDateString(undefined, { month: "long", year: "numeric" });
   await loadCalendarEventsForMonthGrid();
   const grid = document.getElementById("calMonthGrid");
-  const todayStr = toISODate(new Date());
+  const todayISO = todayStr();
   const gridStart = new Date(calMonthCursor); gridStart.setDate(gridStart.getDate() - gridStart.getDay());
   const monthEnd = new Date(calMonthCursor.getFullYear(), calMonthCursor.getMonth() + 1, 0);
   const gridEnd = new Date(monthEnd); gridEnd.setDate(gridEnd.getDate() + (6 - gridEnd.getDay()));
@@ -4331,7 +4343,7 @@ async function renderCalendarMonth() {
     const events = (calEventsByDate[dStr] || []).filter(calEventVisible);
     const shown = events.slice(0, 3);
     html += `
-      <div class="cal-day-cell ${inMonth ? "" : "outside-month"} ${dStr === todayStr ? "is-today" : ""}" data-date="${dStr}">
+      <div class="cal-day-cell ${inMonth ? "" : "outside-month"} ${dStr === todayISO ? "is-today" : ""}" data-date="${dStr}">
         <div class="cal-day-num">${d.getDate()}</div>
         ${shown.map(e => `<div class="cal-event-pill" style="background:${calEventColor(e)}">${calEventRecurIcon(e)}${e.title}</div>`).join("")}
         ${events.length > 3 ? `<div class="cal-event-more">+${events.length - 3} more</div>` : ""}
@@ -4392,7 +4404,7 @@ async function renderCalendarWeek() {
   document.getElementById("calNavLabel").textContent = `${calWeekCursor.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${weekEnd.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
   await loadAllCalendarEvents();
   const map = occurrencesInRange(toISODate(calWeekCursor), toISODate(weekEnd));
-  const todayStr = toISODate(new Date());
+  const todayISO = todayStr();
   const dowLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const wrap = document.getElementById("calWeekView");
   let html = `<div class="cal-week-grid">`;
@@ -4401,7 +4413,7 @@ async function renderCalendarWeek() {
     const dStr = toISODate(d);
     const events = (map[dStr] || []).filter(calEventVisible).sort((a, b) => (a.allDay ? "" : a.startTime || "").localeCompare(b.allDay ? "" : b.startTime || ""));
     html += `
-      <div class="cal-week-col ${dStr === todayStr ? "is-today" : ""}">
+      <div class="cal-week-col ${dStr === todayISO ? "is-today" : ""}">
         <div class="cal-week-col-header">${dowLabels[i]} <span>${d.getDate()}</span></div>
         <div class="cal-week-col-events">
           ${events.map(e => `<div class="cal-event-pill" style="background:${calEventColor(e)}" data-id="${e.id}">${calEventRecurIcon(e)}${e.allDay ? "" : e.startTime + " "}${e.title}</div>`).join("")}
@@ -5044,8 +5056,8 @@ function renderKioskCalBody() {
   const body = document.getElementById("kioskCalBody");
   if (!header || !body) return;
   const dStr = toISODate(kioskCalDayCursor);
-  const todayStr = toISODate(new Date());
-  header.textContent = dStr === todayStr
+  const todayISO = todayStr();
+  header.textContent = dStr === todayISO
     ? "Today"
     : kioskCalDayCursor.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
   const events = (occurrencesInRange(dStr, dStr)[dStr] || []).slice()
@@ -5055,7 +5067,7 @@ function renderKioskCalBody() {
       <span class="kiosk-cal-event-dot" style="background:${kioskCalEventColor(e)}"></span>
       <span class="kiosk-cal-event-time">${e.allDay ? "All day" : (e.startTime || "")}</span>
       <span class="kiosk-cal-event-title">${calEventRecurIcon(e)}${e.title}</span>
-    </div>`).join("")}</div>` : `<div class="kiosk-empty">Nothing on the calendar${dStr === todayStr ? " today" : ""}.</div>`;
+    </div>`).join("")}</div>` : `<div class="kiosk-empty">Nothing on the calendar${dStr === todayISO ? " today" : ""}.</div>`;
 }
 function renderKioskCalendar() {
   const el = document.getElementById("slot-calendar-inner");
@@ -5090,8 +5102,58 @@ function renderKioskBoard() {
   renderKioskCalendar();
 }
 
+/* Kiosk fullscreen handling (ApoloSign has no way to hide its browser's
+   URL bar on its own). Two complementary approaches:
+   1. A tap on the on-screen button requests true browser Fullscreen via
+      the Fullscreen API — works immediately, but browsers require a user
+      gesture to grant it, so it can't be triggered automatically on load,
+      and it has to be tapped again after any reload/reboot.
+   2. A dynamically-injected web app manifest (display: "fullscreen") lets
+      the ApoloSign's browser "Add to Home Screen" the kiosk URL as a
+      standalone app icon — launching from that icon opens with no browser
+      chrome at all, permanently, surviving reloads/reboots. This is the
+      one-time setup worth doing on the actual tablet; the button is the
+      fallback for previewing on desktop or before that's set up. */
+function injectKioskManifest() {
+  const manifest = {
+    name: "Family Command Center — Kitchen Display",
+    short_name: "Kitchen Display",
+    start_url: location.pathname + "?kiosk=1",
+    display: "fullscreen",
+    orientation: "landscape",
+    background_color: "#C9A876",
+    theme_color: "#C9A876"
+  };
+  const blob = new Blob([JSON.stringify(manifest)], { type: "application/manifest+json" });
+  const link = document.createElement("link");
+  link.rel = "manifest";
+  link.href = URL.createObjectURL(blob);
+  document.head.appendChild(link);
+}
+function setupKioskFullscreenButton() {
+  const btn = document.getElementById("kioskFullscreenBtn");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    const el = document.documentElement;
+    if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+    else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+  });
+  const syncFsClass = () => {
+    document.body.classList.toggle("kiosk-fs-active", !!(document.fullscreenElement || document.webkitFullscreenElement));
+  };
+  document.addEventListener("fullscreenchange", syncFsClass);
+  document.addEventListener("webkitfullscreenchange", syncFsClass);
+  // If the page was launched from an "Add to Home Screen" icon (standalone
+  // display mode), it's already chrome-free — no button needed at all.
+  if (window.matchMedia("(display-mode: standalone)").matches || window.matchMedia("(display-mode: fullscreen)").matches) {
+    btn.style.display = "none";
+  }
+}
+
 async function initKioskMode() {
   document.body.classList.add("kiosk-active");
+  injectKioskManifest();
+  setupKioskFullscreenButton();
   await applyTheme(activeTheme);
   await loadMembers();
   await loadLunchMemberSettings();
