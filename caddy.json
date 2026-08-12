@@ -1,0 +1,26 @@
+{
+  "apps": {
+    "http": {
+      "servers": {
+        "immich_cors": {
+          "listen": [":8080"],
+          "routes": [
+            {
+              "match": [{"method": ["OPTIONS"]}],
+              "handle": [
+                {"handler": "headers", "response": {"set": {"Access-Control-Allow-Origin": ["*"], "Access-Control-Allow-Methods": ["GET, POST, PUT, DELETE, OPTIONS"], "Access-Control-Allow-Headers": ["*"]}}},
+                {"handler": "static_response", "status_code": 204}
+              ]
+            },
+            {
+              "handle": [
+                {"handler": "headers", "response": {"set": {"Access-Control-Allow-Origin": ["*"]}}},
+                {"handler": "reverse_proxy", "upstreams": [{"dial": "immich-server:2283"}]}
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}
