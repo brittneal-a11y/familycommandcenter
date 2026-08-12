@@ -4943,7 +4943,7 @@ function recipeFieldsFromJsonLdNode(node, sourceUrl) {
   const totalMin = isoDurationToMinutes(node.totalTime) ||
     ((isoDurationToMinutes(node.prepTime) || 0) + (isoDurationToMinutes(node.cookTime) || 0)) || null;
   return {
-    title: node.name || "",
+    title: node.name || node.headline || "",
     ingredients: ingredientLines.map(parseIngredientLine),
     instructions: normalizeRecipeInstructions(node.recipeInstructions),
     photoURL: normalizeRecipeImage(node.image),
@@ -4971,9 +4971,18 @@ function importRecipeFromPastedHtml(htmlText, sourceUrl) {
    all) and hands the extracted JSON-LD off to this app in a new tab via
    a URL parameter. Built dynamically off the page's own URL so it keeps
    working wherever this file is actually hosted. */
+/* URL-param handoff hit "URI too long" on sites with verbose JSON-LD
+   (reviews, ratings, per-step images, etc. all riding along even though
+   we only use a handful of fields) — some sites' payloads simply
+   exceeded what a URL can hold. Switched to postMessage instead: the
+   bookmarklet opens the app with no query string at all, then posts the
+   recipe data directly to that window once it's loaded. postMessage has
+   no practical size limit, so this sidesteps the problem entirely rather
+   than just trimming around it. Retries for ~7.5s since we don't know
+   exactly when the new tab will finish loading and start listening. */
 function buildRecipeBookmarkletHref() {
   const targetBase = location.origin + location.pathname;
-  const code = `(function(){function fN(n){if(!n)return null;if(Array.isArray(n)){for(var i=0;i<n.length;i++){var f=fN(n[i]);if(f)return f;}return null;}if(typeof n!=='object')return null;var t=n['@type'];var ts=Array.isArray(t)?t.join(','):(t||'');if(ts.indexOf('Recipe')>-1)return n;if(n['@graph'])return fN(n['@graph']);return null;}var ss=document.querySelectorAll('script[type="application/ld+json"]');var node=null;for(var i=0;i<ss.length;i++){try{var d=JSON.parse(ss[i].textContent);var f=fN(d);if(f){node=f;break;}}catch(e){}}if(!node){alert('No recipe data found on this page.');return;}var payload=encodeURIComponent(JSON.stringify(node));window.open('${targetBase}?importRecipe='+payload,'_blank');})();`;
+  const code = `(function(){function fN(n){if(!n)return null;if(Array.isArray(n)){for(var i=0;i<n.length;i++){var f=fN(n[i]);if(f)return f;}return null;}if(typeof n!=='object')return null;var t=n['@type'];var ts=Array.isArray(t)?t.join(','):(t||'');if(ts.indexOf('Recipe')>-1)return n;if(n['@graph'])return fN(n['@graph']);return null;}var ss=document.querySelectorAll('script[type="application/ld+json"]');var node=null;for(var i=0;i<ss.length;i++){try{var d=JSON.parse(ss[i].textContent);var f=fN(d);if(f){node=f;break;}}catch(e){}}if(!node){alert('No recipe data found on this page.');return;}var srcUrl=location.href;var win=window.open('${targetBase}','_blank');if(!win){alert('Please allow pop-ups for this site, then try the bookmark again.');return;}var tries=0;var iv=setInterval(function(){tries++;try{win.postMessage({type:'fccImportRecipe',node:node,sourceUrl:srcUrl},'*');}catch(e){}if(tries>25){clearInterval(iv);}},300);})();`;
   return "javascript:" + encodeURIComponent(code);
 }
 
@@ -4983,10 +4992,12 @@ function openRecipeModal(recipe, prefill) {
   let importedNutrition = prefill?.nutrition || recipe?.nutrition || null;
   let importedSourceUrl = prefill?.sourceUrl || recipe?.sourceUrl || "";
   const bookmarkletHref = buildRecipeBookmarkletHref();
+  const isLocalFile = location.protocol === "file:";
   const html = `
     <h2 style="font-size:1.4rem;">${recipe ? "Edit recipe" : "New recipe"}</h2>
     <div class="builder-field" style="background:var(--cork); padding:10px; border-radius:8px;">
       <label>Import — drag this to your bookmarks bar once</label>
+      ${isLocalFile ? `<div style="font-size:0.78rem; color:#b0472e; font-weight:700; margin-bottom:6px;">⚠️ You're viewing this app as a local file right now, not a real web address. Recipe sites can't hand data off to a file:// link — this bookmarklet won't work until you drag it from the app's real hosted URL (e.g. your GitHub Pages link) instead.</div>` : ""}
       <a href="${bookmarkletHref}" class="btn secondary" style="display:inline-block; text-decoration:none; margin:2px 0 6px;" onclick="return false;">🍳 Import to FCC</a>
       <div style="font-size:0.74rem; color:#8a7f6d;">Then, while viewing a recipe you like, click that bookmark — it reads the recipe right off the page (no fetching, so nothing to block) and opens this form pre-filled in a new tab.</div>
     </div>
@@ -6051,27 +6062,28 @@ async function init() {
   document.getElementById("openKioskBtn")?.addEventListener("click", () => {
     window.open(location.pathname + "?kiosk=1", "_blank");
   });
-  /* Bookmarklet handoff (Phase 6 recipe import) — the bookmarklet opens
-     this app in a new tab with the recipe's raw JSON-LD node in the
-     ?importRecipe= param. Land straight on Meals → Recipes with the New
-     Recipe modal pre-filled, then strip the param so a page refresh
-     doesn't re-trigger it. */
-  const importPayload = new URLSearchParams(location.search).get("importRecipe");
-  if (importPayload) {
-    history.replaceState(null, "", location.pathname);
-    try {
-      const node = JSON.parse(importPayload);
-      if (!recipesLoaded) await loadRecipes();
-      const prefill = recipeFieldsFromJsonLdNode(node, document.referrer || "");
-      activateView("meals");
-      activateMealsSubview("recipes");
-      openRecipeModal(null, prefill);
-    } catch (e) {
-      console.warn("bookmarklet recipe import failed", e);
-      alert("Couldn't read the recipe data handed off from the bookmarklet — you can still paste the URL or HTML source in manually under Add recipe.");
-    }
-  }
 }
+/* Bookmarklet handoff (Phase 6 recipe import) — registered at module
+   load, independent of init()'s async setup, since the bookmarklet's
+   retry loop starts posting within ~300ms of opening this tab and we
+   don't want to miss the early attempts while Firebase/members are
+   still loading. Guarded to act on only the first message received. */
+let bookmarkletImportHandled = false;
+window.addEventListener("message", async (e) => {
+  if (bookmarkletImportHandled) return;
+  if (!e.data || e.data.type !== "fccImportRecipe" || !e.data.node) return;
+  bookmarkletImportHandled = true;
+  try {
+    if (!recipesLoaded) await loadRecipes();
+    const prefill = recipeFieldsFromJsonLdNode(e.data.node, e.data.sourceUrl || "");
+    activateView("meals");
+    activateMealsSubview("recipes");
+    openRecipeModal(null, prefill);
+  } catch (err) {
+    console.warn("bookmarklet recipe import failed", err);
+    alert("Couldn't read the recipe data handed off from the bookmarklet — you can still paste the URL or HTML source in manually under Add recipe.");
+  }
+});
 init();
 
 /* Debug hook — module-scoped variables like `members` aren't attached to
