@@ -778,6 +778,7 @@
      lunch and a dinner section too, hence the small section header now
      to establish that pattern early) ---- */
   .kiosk-lunch-section-header { font-size: 24px; font-weight: 700; color: #8a7f6d; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+  .kiosk-daylabel { font-size: 14px; font-weight: 400; opacity: 0.65; font-style: italic; }
   .kiosk-lunch-list { display: flex; flex-direction: column; gap: 22px; }
   .kiosk-lunch-row { display: flex; align-items: center; gap: 18px; }
   .kiosk-lunch-avatar { font-size: 42px; flex: 0 0 auto; }
@@ -3180,7 +3181,7 @@ function parseTaskText(rawText) {
     title = title.replace(timeMatch[0], "");
   }
   let m;
-  if ((m = rawText.match(/\btoday\b/i))) { date = toISODate(new Date()); title = title.replace(m[0], ""); }
+  if ((m = rawText.match(/\btoday\b/i))) { date = todayStr(); title = title.replace(m[0], ""); }
   else if ((m = rawText.match(/\btomorrow\b/i))) { const d = new Date(); d.setDate(d.getDate() + 1); date = toISODate(d); title = title.replace(m[0], ""); }
   else if ((m = rawText.match(/\bin\s+(\d+)\s+days?\b/i))) { const d = new Date(); d.setDate(d.getDate() + parseInt(m[1], 10)); date = toISODate(d); title = title.replace(m[0], ""); }
   else if ((m = rawText.match(/\bnext\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i))) { date = nextWeekdayISO(m[1], true); title = title.replace(m[0], ""); }
@@ -3487,7 +3488,7 @@ function renderTasksList() {
     return;
   }
   const overdue = visible.filter(isTaskOverdue);
-  const todayISO = toISODate(new Date());
+  const todayISO = todayStr();
   const dueToday = visible.filter(t => !isTaskOverdue(t) && !taskCompleted(t) && parseDueDate(taskDueRaw(t)) && toISODate(parseDueDate(taskDueRaw(t))) === todayISO);
   const upcoming = visible.filter(t => !overdue.includes(t) && !dueToday.includes(t) && !taskCompleted(t));
   const done = visible.filter(taskCompleted);
@@ -4144,7 +4145,7 @@ function renderHomeRoutineWidget() {
 function renderHomeTasksWidget() {
   const container = document.getElementById("homeTasksWidget");
   const overdueTasks = tasks.filter(isTaskOverdue);
-  const todayISO = toISODate(new Date());
+  const todayISO = todayStr();
   const dueTodayTasks = tasks.filter(t => !isTaskOverdue(t) && !taskCompleted(t) && parseDueDate(taskDueRaw(t)) && toISODate(parseDueDate(taskDueRaw(t))) === todayISO);
   // Next few upcoming tasks beyond today, so the card isn't empty just
   // because nothing happens to be due right this moment — sorted by
@@ -4492,7 +4493,7 @@ function openCalEventModal(event, presetDate) {
     <h3>${event ? "Edit event" : "Add event"}</h3>
     ${event && event.recurType && event.recurType !== "none" ? `<div class="cal-event-meta" style="margin-bottom:8px;">🔁 Editing this saves changes to the whole repeating series, not just today's occurrence.</div>` : ""}
     <div class="builder-field"><label>Title</label><input type="text" id="calEvTitle" value="${(event?.title || "").replace(/"/g, "&quot;")}"></div>
-    <div class="builder-field"><label>Date${event && recurType !== "none" ? " (first occurrence)" : ""}</label><input type="date" id="calEvDate" value="${event?.date || presetDate || toISODate(new Date())}"></div>
+    <div class="builder-field"><label>Date${event && recurType !== "none" ? " (first occurrence)" : ""}</label><input type="date" id="calEvDate" value="${event?.date || presetDate || todayStr()}"></div>
     <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem; margin:6px 0;">
       <input type="checkbox" id="calEvAllDay" ${(!event || event.allDay) ? "checked" : ""}> All day
     </label>
@@ -4609,11 +4610,11 @@ document.getElementById("calTodayBtn").addEventListener("click", () => {
   calMonthCursor = startOfMonth(new Date());
   calWeekCursor = calStartOfWeek(new Date());
   calDayCursor = todayMidnight();
-  calSelectedDate = toISODate(new Date());
+  calSelectedDate = todayStr();
   renderCalendarView();
 });
 document.getElementById("calAddEventBtn").addEventListener("click", () => {
-  const preset = calViewMode === "day" ? toISODate(calDayCursor) : (calSelectedDate || toISODate(new Date()));
+  const preset = calViewMode === "day" ? toISODate(calDayCursor) : (calSelectedDate || todayStr());
   openCalEventModal(null, preset);
 });
 
@@ -4785,11 +4786,25 @@ function renderCorkboardSlots() {
    (forecast_days=7, starting today). Today's condition big on the left,
    3-day strip to the right, split by a divider — sized to actually use
    the cloud's full width instead of sitting small and centered in it. ---- */
+/* ---- Evening rollover for kiosk widgets that are inherently about
+   "what's coming up" (Lunch, Outfit) rather than "what's true right now"
+   (Weather, Calendar, Routines/Tasks — those always use todayStr()). At
+   5pm local time, these two widgets switch to showing tomorrow's plan
+   instead of today's already-passed one, since that's what's actually
+   useful to look at in the evening. Both callers label the widget
+   accordingly so it's never ambiguous which day is showing. ---- */
+function kioskEffectiveDate() {
+  const d = new Date();
+  if (d.getHours() >= 17) d.setDate(d.getDate() + 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function kioskEffectiveDayLabel() { return new Date().getHours() >= 17 ? "Tomorrow" : "Today"; }
+
 function kioskWeatherEmoji(cond) { return { sunny: "☀️", cloudy: "☁️", rain: "🌧️", snow: "❄️" }[cond] || "☁️"; }
 async function renderKioskWeather() {
   const el = document.getElementById("slot-weather-inner");
   if (!el) return;
-  const today = toISODate(new Date());
+  const today = todayStr();
   if (!weatherByDate[today]) { try { await fetchAndCacheWeather(); } catch (e) { console.warn("kiosk weather fetch failed", e); } }
   const todayWeather = weatherByDate[today];
   if (!todayWeather) { el.innerHTML = `<div class="kiosk-empty">Weather unavailable</div>`; return; }
@@ -4820,23 +4835,24 @@ async function renderKioskLunch() {
   const el = document.getElementById("slot-lunch-inner");
   if (!el) return;
   const trackedMembers = members.filter(isMemberTracked);
-  const today = toISODate(new Date());
-  try { await loadLunchDataForRange(today, today); } catch (e) { console.warn("kiosk lunch load failed", e); }
+  const planDate = kioskEffectiveDate();
+  try { await loadLunchDataForRange(planDate, planDate); } catch (e) { console.warn("kiosk lunch load failed", e); }
   if (!trackedMembers.length) { el.innerHTML = `<div class="kiosk-empty handwritten">No lunches tracked yet.</div>`; return; }
   const rows = trackedMembers.map(m => {
-    const choice = getLunchChoice(m.id, today);
+    const choice = getLunchChoice(m.id, planDate);
     let text;
     if (choice === "packed") {
-      const plan = lunchPlansByMemberDate[`${m.id}_${today}`];
+      const plan = lunchPlansByMemberDate[`${m.id}_${planDate}`];
       text = summarizePackedItems(plan?.packedItems) || "Packed";
     } else if (choice === "home") {
       text = "Lunch at home";
     } else {
-      text = schoolLunchMenus[today]?.entree || "School lunch";
+      text = schoolLunchMenus[planDate]?.entree || "School lunch";
     }
     return `<div class="kiosk-lunch-row"><span class="kiosk-lunch-avatar">${m.emoji || "🙂"}</span><span class="kiosk-lunch-name handwritten">${m.name}</span><span class="kiosk-lunch-choice">${text}</span></div>`;
   }).join("");
-  el.innerHTML = `<div class="kiosk-lunch-section-header handwritten">🍱 Lunch</div><div class="kiosk-lunch-list">${rows}</div>`;
+  const dayLabel = kioskEffectiveDayLabel();
+  el.innerHTML = `<div class="kiosk-lunch-section-header handwritten">🍱 Lunch${dayLabel === "Tomorrow" ? ` <span class="kiosk-daylabel">(Tomorrow)</span>` : ""}</div><div class="kiosk-lunch-list">${rows}</div>`;
 }
 
 /* ---- Outfit swiper (top-left paper) — touch swipe between members'
@@ -4860,11 +4876,11 @@ function kioskOutfitMosaicHTML(itemIds) {
   return `<div class="thumb-mosaic" data-count="${urls.length}">${urls.map(u => `<img src="${u}" alt="">`).join("")}</div>`;
 }
 async function loadKioskOutfitPlans() {
-  const today = toISODate(new Date());
+  const planDate = kioskEffectiveDate();
   kioskOutfitMemberIds = members.filter(m => m.type !== "pet").map(m => m.id);
   const plansByMember = {};
   try {
-    const snap = await getDocs(query(collection(db, "outfitPlans"), where("date", "==", today)));
+    const snap = await getDocs(query(collection(db, "outfitPlans"), where("date", "==", planDate)));
     snap.docs.forEach(d => { const data = d.data(); plansByMember[data.memberId] = { id: d.id, ...data }; });
   } catch (e) { console.warn("kiosk outfitPlans load failed", e); }
   for (const memberId of Object.keys(plansByMember)) {
@@ -4890,7 +4906,7 @@ function renderKioskOutfitSwiper() {
   const plan = kioskOutfitPlansByMember[memberId];
   el.innerHTML = `
     <div class="kiosk-outfit-swiper">
-      <div class="kiosk-outfit-header handwritten">${member?.emoji || "🙂"} ${member?.name || "—"}'s outfit</div>
+      <div class="kiosk-outfit-header handwritten">${member?.emoji || "🙂"} ${member?.name || "—"}'s outfit${kioskEffectiveDayLabel() === "Tomorrow" ? ` <span class="kiosk-daylabel">(Tomorrow)</span>` : ""}</div>
       <div class="kiosk-outfit-mosaic">${plan ? kioskOutfitMosaicHTML(plan._resolvedItemIds) : `<div class="kiosk-empty">Nothing planned yet</div>`}</div>
       ${kioskOutfitMemberIds.length > 1 ? `<div class="kiosk-swiper-dots">${kioskOutfitMemberIds.map((id, i) => `<span class="dot ${i === kioskOutfitIndex ? "active" : ""}" data-idx="${i}"></span>`).join("")}</div>` : ""}
     </div>`;
@@ -5001,7 +5017,7 @@ function renderKioskRoutinesTasks() {
     }
   }
   const overdueTasks = tasks.filter(isTaskOverdue);
-  const todayISO = toISODate(new Date());
+  const todayISO = todayStr();
   const dueTodayTasks = tasks.filter(t => !isTaskOverdue(t) && !taskCompleted(t) && parseDueDate(taskDueRaw(t)) && toISODate(parseDueDate(taskDueRaw(t))) === todayISO);
   const taskRows = [...overdueTasks, ...dueTodayTasks];
   const tasksHtml = taskRows.length ? taskRows.map(t => `
